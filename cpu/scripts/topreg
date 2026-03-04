@@ -1,0 +1,282 @@
+#!/usr/bin/perl -w
+#
+# file: topreg
+# Description: NetFPGA MMIO utility (64-bit safe, prints hex and signed decimal)
+#
+
+use strict;
+use Math::BigInt;
+
+# ================================================================
+# Register Address Map
+# ================================================================
+
+my $TOP_SW_REQ_CMD_REG       = 0x2001000;
+my $TOP_SW_REQ_ADDR_REG      = 0x2001004;
+my $TOP_SW_REQ_DATA_LO_REG   = 0x2001008;
+my $TOP_SW_REQ_DATA_HI_REG   = 0x200100c;
+my $TOP_SW_REQ_VAL_REG       = 0x2001010;
+my $TOP_SW_RESP_RDY_REG      = 0x2001014;
+my $TOP_SW_CPU_START_REG     = 0x2001018;
+
+my $TOP_HW_REQ_RDY_REG       = 0x200101c;
+my $TOP_HW_RESP_DATA_LO_REG  = 0x2001020;
+my $TOP_HW_RESP_DATA_HI_REG  = 0x2001024;
+my $TOP_HW_RESP_VAL_REG      = 0x2001028;
+
+# ================================================================
+# Base Addresses
+# ================================================================
+
+my $IMEM_BASE = 0x00000000;
+my $CTRL_BASE = 0x40000000;
+my $DMEM_BASE = 0x80000000;
+
+# ================================================================
+# Low Level Register Access
+# ================================================================
+
+sub regwrite {
+    my ($addr, $value) = @_;
+    system(sprintf("regwrite 0x%08x 0x%08x 2>/dev/null", $addr, $value));
+}
+
+sub regread {
+    my ($addr) = @_;
+
+    my @out = `regread 0x@{[sprintf("%08x",$addr)]} 2>/dev/null`;
+
+    foreach my $line (@out) {
+        if ($line =~ m/:\s+(0x[0-9a-f]+)/i) {
+            return hex($1);
+        }
+    }
+
+    return 0;
+}
+
+# ================================================================
+# MMIO Helpers
+# ================================================================
+
+sub wait_req_rdy {
+    for (1..5000) {
+        return 1 if (regread($TOP_HW_REQ_RDY_REG) & 0x1);
+        select(undef, undef, undef, 0.001);
+    }
+    print "Timeout req_rdy\n";
+    return 0;
+}
+
+sub wait_resp_val {
+    for (1..5000) {
+        return 1 if (regread($TOP_HW_RESP_VAL_REG) & 0x1);
+        select(undef, undef, undef, 0.001);
+    }
+    print "Timeout resp_val\n";
+    return 0;
+}
+
+# ================================================================
+# Safe 64-bit MMIO Write
+# ================================================================
+
+sub mmio_write {
+    my ($addr, $data_hex) = @_;
+
+    return unless wait_req_rdy();
+
+    $data_hex =~ s/^0x//i;
+    $data_hex = sprintf("%016s", $data_hex);
+    $data_hex =~ tr/ /0/;
+
+    my $hi = hex(substr($data_hex, 0, 8));
+    my $lo = hex(substr($data_hex, 8, 8));
+
+    regwrite($TOP_SW_REQ_ADDR_REG, $addr);
+    regwrite($TOP_SW_REQ_DATA_LO_REG, $lo);
+    regwrite($TOP_SW_REQ_DATA_HI_REG, $hi);
+
+    regwrite($TOP_SW_REQ_CMD_REG, 1);
+    regwrite($TOP_SW_RESP_RDY_REG, 1);
+    regwrite($TOP_SW_REQ_VAL_REG, 1);
+
+    return unless wait_resp_val();
+
+    regwrite($TOP_SW_REQ_VAL_REG, 0);
+    regwrite($TOP_SW_RESP_RDY_REG, 0);
+}
+
+# ================================================================
+# Safe 64-bit MMIO Read
+# ================================================================
+
+sub mmio_read {
+    my ($addr) = @_;
+
+    return "0x0" unless wait_req_rdy();
+
+    regwrite($TOP_SW_REQ_ADDR_REG, $addr);
+    regwrite($TOP_SW_REQ_CMD_REG, 0);
+    regwrite($TOP_SW_RESP_RDY_REG, 1);
+    regwrite($TOP_SW_REQ_VAL_REG, 1);
+
+    return "0x0" unless wait_resp_val();
+
+    my $lo = regread($TOP_HW_RESP_DATA_LO_REG);
+    my $hi = regread($TOP_HW_RESP_DATA_HI_REG);
+
+    regwrite($TOP_SW_REQ_VAL_REG, 0);
+    regwrite($TOP_SW_RESP_RDY_REG, 0);
+
+    return sprintf("0x%08x%08x", $hi, $lo);
+}
+
+# ================================================================
+# Signed Conversion
+# ================================================================
+
+sub hex_to_signed64 {
+    my ($hex) = @_;
+    $hex =~ s/^0x//;
+
+    my $val = Math::BigInt->new("0x$hex");
+    my $sign = $val->copy()->band(Math::BigInt->new("0x8000000000000000"));
+
+    if ($sign != 0) {
+        $val->bsub(Math::BigInt->new("0x10000000000000000"));
+    }
+
+    return $val->bstr();
+}
+
+sub hex_to_signed32 {
+    my ($hex) = @_;
+    $hex =~ s/^0x//;
+
+    my $val = Math::BigInt->new("0x$hex");
+    my $sign = $val->copy()->band(Math::BigInt->new("0x80000000"));
+
+    if ($sign != 0) {
+        $val->bsub(Math::BigInt->new("0x100000000"));
+    }
+
+    return $val->bstr();
+}
+
+# ================================================================
+# CPU Control
+# ================================================================
+
+sub start_cpu {
+    print "Starting CPU...\n";
+    regwrite($TOP_SW_CPU_START_REG, 1);
+}
+
+sub stop_cpu {
+    regwrite($TOP_SW_CPU_START_REG, 0);
+    select(undef, undef, undef, 0.1);
+}
+
+# ================================================================
+# Address Helper
+# ================================================================
+
+sub get_base {
+    my ($region) = @_;
+
+    return $IMEM_BASE if $region eq "imem";
+    return $DMEM_BASE if $region eq "dmem";
+    return $CTRL_BASE if $region eq "ctrl";
+
+    return undef;
+}
+
+# ================================================================
+# Read Command
+# ================================================================
+
+sub read_region {
+    my ($region, $offset) = @_;
+
+    stop_cpu();
+
+    if ($region eq "imem") {
+
+        my $val = mmio_read($IMEM_BASE | $offset);
+        $val =~ s/^0x........//;
+
+        my $signed = hex_to_signed32("0x$val");
+
+        printf("IMEM[%d] = 0x%s (%s)\n", $offset, $val, $signed);
+
+    }
+    elsif ($region eq "dmem") {
+
+        my $val = mmio_read($DMEM_BASE | $offset);
+        my $signed = hex_to_signed64($val);
+
+        printf("DMEM[%d] = %s (%s)\n", $offset, $val, $signed);
+
+    }
+    elsif ($region eq "ctrl") {
+
+        my $val = mmio_read($CTRL_BASE);
+        my $signed = hex_to_signed64($val);
+
+        printf("CTRL = %s (%s)\n", $val, $signed);
+
+    }
+}
+
+# ================================================================
+# Write Command
+# ================================================================
+
+sub write_region {
+    my ($region, $offset, $value) = @_;
+
+    my $base = get_base($region);
+
+    if (!defined $base) {
+        print "Region must be imem, dmem, or ctrl\n";
+        return;
+    }
+
+    my $addr = $base | $offset;
+
+    mmio_write($addr, $value);
+
+    printf("Wrote %s to %s[%d]\n", $value, $region, $offset);
+}
+
+# ================================================================
+# Main
+# ================================================================
+
+my $cmd = $ARGV[0] || "help";
+
+if ($cmd eq "start") {
+
+    start_cpu();
+    sleep(5);
+
+}
+elsif ($cmd eq "read") {
+
+    read_region($ARGV[1], $ARGV[2]);
+
+}
+elsif ($cmd eq "write") {
+
+    write_region($ARGV[1], $ARGV[2], $ARGV[3]);
+
+}
+else {
+
+    print "Usage:\n";
+    print "  topreg start\n";
+    print "  topreg read  <imem|dmem|ctrl> [index]\n";
+    print "  topreg write <imem|dmem|ctrl> <index> <value>\n";
+
+}
