@@ -9,8 +9,6 @@ module conv_fifo #(
     input  [DATA_WIDTH-1:0]             in_fifo,
     input                               fifowrite,
     input                               fiforead,
-    input                               firstword,
-    input                               lastword,
     output reg [DATA_WIDTH-1:0]         out_fifo,
     output reg                          valid_data,
     output reg                          fifo_full,
@@ -19,8 +17,8 @@ module conv_fifo #(
     input                               cpu_read,
     input                               cpu_write,
     input  [ADDR_WIDTH-1:0]             cpu_addr,
-    input  [DATA_WIDTH-1:0]             cpu_wdata,
-    output reg [DATA_WIDTH-1:0]         cpu_rdata
+    input  [63:0]                       cpu_wdata,
+    output reg [63:0]                   cpu_rdata
 );
 
 // State Machine parameters
@@ -28,8 +26,18 @@ localparam IDLE_S     = 2'd0;
 localparam RECEIVE_S  = 2'd1;
 localparam WAIT_CPU_S = 2'd2;
 localparam SEND_S     = 2'd3;
-
 reg [1:0] state, next_state;
+
+// pkt sm
+localparam START_P   = 2'd0;
+localparam HEADER_P  = 2'd1;
+localparam PAYLOAD_P = 2'd2;
+reg [1:0] pkt_state;
+reg [2:0] header_count;
+reg begin_pkt;
+reg end_pkt;
+wire [7:0] in_ctrl;
+assign in_ctrl = in_fifo[DATA_WIDTH-1:DATA_WIDTH-8];
 
 //=============== Signals ================== 
 reg [ADDR_WIDTH-1:0] write_ptr;
@@ -63,14 +71,14 @@ always @(*) begin
 
     case (state)
         IDLE_S: begin
-            if (fifowrite && firstword && lastword)
-                next_state <= WAIT_CPU_S;
-            else if (fifowrite && firstword)
+            if (fifowrite && begin_pkt && end_pkt)
+                next_state = WAIT_CPU_S;
+            else if (fifowrite && begin_pkt)
                 next_state = RECEIVE_S;
         end
 
         RECEIVE_S: begin
-            if (fifowrite && lastword)
+            if (fifowrite && end_pkt)
                 next_state = WAIT_CPU_S;
         end
 
@@ -95,7 +103,7 @@ always @(posedge clk or posedge rst) begin
         packet_ready  <= 1'b0;
         valid_data    <= 1'b0;
         out_fifo      <= {DATA_WIDTH{1'b0}};
-        cpu_rdata     <= {DATA_WIDTH{1'b0}};
+        cpu_rdata     <= 63'b0;
 
         write_ptr     <= {ADDR_WIDTH{1'b0}};
         send_ptr      <= {ADDR_WIDTH{1'b0}};
@@ -109,36 +117,80 @@ always @(posedge clk or posedge rst) begin
         bram_we_b     <= 1'b0;
         bram_addr_b   <= {ADDR_WIDTH{1'b0}};
         bram_din_b    <= {DATA_WIDTH{1'b0}};
+
+        // Pkt
+        pkt_state <= START_P;
+        header_count <= 3'd0;
+        begin_pkt <= 1'b0;
+        end_pkt <= 1'b0;
+
     end else begin
         bram_we_a   <= 1'b0;
         bram_we_b   <= 1'b0;
         valid_data  <= 1'b0;
+        begin_pkt <= 1'b0;
+        end_pkt <= 1'b0;
 
+        // Pkt
+        if (fifowrite) begin
+            case (pkt_state)
+                START_P: begin
+                    if (in_ctrl != 0) begin
+                        pkt_state <= HEADER_P;
+                        header_count <= 3'd0;
+                        begin_pkt <= 1'b1;
+                    end
+                end
+
+                HEADER_P: begin
+                    if (in_ctrl == 0) begin
+                        header_count <= header_count + 1'b1;
+                        if (header_count == 3'd2)
+                            pkt_state <= PAYLOAD_P;
+                    end
+                end
+
+                PAYLOAD_P: begin
+                    if (in_ctrl != 0) begin
+                        pkt_state <= START_P;
+                        header_count <= 3'd0;
+                        end_pkt <= 1'b1;
+                    end
+                end
+
+                default: begin
+                    pkt_state <= START_P;
+                    header_count <= 3'd0;
+                end
+            endcase
+        end
+
+        // FIFO
         case (state)
             // Wait for first word
             IDLE_S: begin
-                fifo_full    <= 1'b0;
+                fifo_full <= 1'b0;
                 packet_ready <= 1'b0;
 
-                bram_addr_a  <= write_ptr;
-                bram_din_a   <= in_fifo;
+                bram_addr_a <= write_ptr;
+                bram_din_a <= in_fifo;
 
-                if (fifowrite && firstword) begin
+                if (fifowrite && begin_pkt) begin
                     packet_start <= write_ptr;
 
-                    bram_we_a   <= 1'b1;
+                    bram_we_a <= 1'b1;
                     bram_addr_a <= write_ptr;
-                    bram_din_a  <= in_fifo;
+                    bram_din_a <= in_fifo;
 
-                    if (lastword) begin
+                    if (end_pkt) begin
                         packet_end <= write_ptr;
                         if (write_ptr == {ADDR_WIDTH{1'b1}})
                             next_free_ptr <= {ADDR_WIDTH{1'b0}};
                         else
                             next_free_ptr <= write_ptr + 1'b1;
-                        send_ptr      <= write_ptr;
-                        fifo_full     <= 1'b1;
-                        packet_ready  <= 1'b1;
+                        send_ptr <= write_ptr;
+                        fifo_full <= 1'b1;
+                        packet_ready <= 1'b1;
                     end
 
                     if (write_ptr == {ADDR_WIDTH{1'b1}})
@@ -150,23 +202,23 @@ always @(posedge clk or posedge rst) begin
 
             // Receive packets from NetFPGA
             RECEIVE_S: begin
-                fifo_full    <= 1'b0;
+                fifo_full <= 1'b0;
                 packet_ready <= 1'b0;
 
                 if (fifowrite) begin
-                    bram_we_a   <= 1'b1;
+                    bram_we_a <= 1'b1;
                     bram_addr_a <= write_ptr;
-                    bram_din_a  <= in_fifo;
+                    bram_din_a <= in_fifo;
 
-                    if (lastword) begin
+                    if (end_pkt) begin
                         packet_end <= write_ptr;
                         if (write_ptr == {ADDR_WIDTH{1'b1}})
                             next_free_ptr <= {ADDR_WIDTH{1'b0}};
                         else
                             next_free_ptr <= write_ptr + 1'b1;
-                        send_ptr      <= packet_start;
-                        fifo_full     <= 1'b1;
-                        packet_ready  <= 1'b1;
+                        send_ptr <= packet_start;
+                        fifo_full <= 1'b1;
+                        packet_ready <= 1'b1;
                     end
 
                     if (write_ptr == {ADDR_WIDTH{1'b1}})
@@ -178,17 +230,17 @@ always @(posedge clk or posedge rst) begin
 
             // CPU accesses bram
             WAIT_CPU_S: begin
-                fifo_full    <= 1'b1;
+                fifo_full <= 1'b1;
                 packet_ready <= 1'b1;
 
                 bram_addr_b <= cpu_addr;
-                bram_din_b  <= cpu_wdata;
 
-                if (cpu_write)
+                if (cpu_write) begin
+                    bram_din_b <= {bram_dout_b[71:64], cpu_wdata};
                     bram_we_b <= 1'b1;
-
+                end
                 if (cpu_read)
-                    cpu_rdata <= bram_dout_b;
+                    cpu_rdata <= bram_dout_b[63:0];
 
                 if (cpu_done)
                     send_ptr <= packet_start;
@@ -196,13 +248,13 @@ always @(posedge clk or posedge rst) begin
             
             // Output processed packets
             SEND_S: begin
-                fifo_full    <= 1'b1;
+                fifo_full <= 1'b1;
                 packet_ready <= 1'b0;
 
                 bram_addr_b <= send_ptr;
 
                 if (fiforead) begin
-                    out_fifo   <= bram_dout_b;
+                    out_fifo <= bram_dout_b;
                     valid_data <= 1'b1;
 
                     if (send_ptr == packet_end) begin
@@ -218,9 +270,9 @@ always @(posedge clk or posedge rst) begin
             end
 
             default: begin
-                fifo_full    <= 1'b0;
+                fifo_full <= 1'b0;
                 packet_ready <= 1'b0;
-                valid_data   <= 1'b0;
+                valid_data <= 1'b0;
             end
         endcase
     end

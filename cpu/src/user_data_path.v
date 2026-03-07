@@ -224,6 +224,25 @@ module user_data_path
    wire [`CPCI_NF2_DATA_WIDTH-1:0]  top_in_reg_data;
    wire [UDP_REG_SRC_WIDTH-1:0]     top_in_reg_src;
 
+   //------- fifo wires/regs ------   
+   wire [DATA_WIDTH-1:0] fifo_out_data;
+   wire [CTRL_WIDTH-1:0] fifo_out_ctrl;
+   wire [DATA_WIDTH+CTRL_WIDTH-1:0] fifo_out_word;
+   wire fifo_out_wr;
+   wire fifo_in_rdy;
+
+   wire [DATA_WIDTH+CTRL_WIDTH-1:0] fifo_in_word;
+   wire fifo_full;
+   wire        fifo_cpu_read;
+   wire        fifo_cpu_write;
+   wire        fifo_cpu_done;
+   wire [7:0]  fifo_cpu_addr;
+   wire [63:0] fifo_cpu_wdata;
+   wire [63:0] fifo_cpu_rdata;
+   wire        fifo_packet_ready;
+   assign fifo_in_word = {oq_in_ctrl, oq_in_data};
+   assign fifo_in_rdy = ~fifo_full;
+
    //------- output queues wires/regs ------
    wire [CTRL_WIDTH-1:0]            oq_in_ctrl;
    wire [DATA_WIDTH-1:0]            oq_in_data;
@@ -333,7 +352,7 @@ module user_data_path
      (.out_data            (oq_in_data),
      .out_ctrl             (oq_in_ctrl),
      .out_wr               (oq_in_wr),
-     .out_rdy              (oq_in_rdy),
+     .out_rdy              (fifo_in_rdy),
                            
       // --- Interface to the rx input queues
      .in_data              (op_lut_in_data),
@@ -388,6 +407,30 @@ module user_data_path
       .reset                             (reset)
    );
    
+   // FIFO
+   conv_fifo #(
+      .ADDR_WIDTH(8),
+      .DATA_WIDTH(DATA_WIDTH+CTRL_WIDTH)
+   ) conv_fifo (
+      .clk          (clk),
+      .rst          (reset),
+      .in_fifo      (fifo_in_word),
+      .fifowrite    (oq_in_wr),
+      .fiforead     (oq_in_rdy),
+      .out_fifo     (fifo_out_word),
+      .valid_data   (fifo_out_wr),
+      .fifo_full    (fifo_full),
+      .packet_ready (fifo_packet_ready),
+      .cpu_done     (fifo_cpu_done),
+      .cpu_read     (fifo_cpu_read),
+      .cpu_write    (fifo_cpu_write),
+      .cpu_addr     (fifo_cpu_addr),
+      .cpu_wdata    (fifo_cpu_wdata),
+      .cpu_rdata    (fifo_cpu_rdata)     
+   );
+  assign fifo_out_ctrl = fifo_out_word[DATA_WIDTH+CTRL_WIDTH-1:DATA_WIDTH];
+  assign fifo_out_data = fifo_out_word[DATA_WIDTH-1:0];
+
    output_queues
      #(.DATA_WIDTH(DATA_WIDTH),
        .CTRL_WIDTH(CTRL_WIDTH),
@@ -439,10 +482,10 @@ module user_data_path
     .out_rdy_7        (out_rdy_7),
                       
       // --- Interface to the previous module
-    .in_data          (oq_in_data),
-    .in_ctrl          (oq_in_ctrl),
+    .in_data          (fifo_out_data),
+    .in_ctrl          (fifo_out_ctrl),
     .in_rdy           (oq_in_rdy),
-    .in_wr            (oq_in_wr),
+    .in_wr            (fifo_out_wr),
                       
       // --- Register interface
     .reg_req_in       (oq_in_reg_req),
