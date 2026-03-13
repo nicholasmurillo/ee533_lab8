@@ -12,3 +12,4 @@
 `define REGION_D_MEM 2'b10
 `define I_MEM_SIZE (1 << `I_MEM_ADDR_WIDTH)
 `define I_MEM_BLOCK (`I_MEM_SIZE / 4)
+`define FIFO_ADDR_WIDTH 8

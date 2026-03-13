@@ -233,7 +233,7 @@ always @(posedge clk or posedge rst) begin
                 fifo_full <= 1'b1;
                 packet_ready <= 1'b1;
 
-                bram_addr_b <= cpu_addr;
+                bram_addr_b <=  packet_start + cpu_addr;
 
                 if (cpu_write) begin
                     bram_din_b <= {bram_dout_b[71:64], cpu_wdata};
