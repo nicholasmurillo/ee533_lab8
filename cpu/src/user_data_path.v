@@ -404,7 +404,14 @@ module user_data_path
 
       // --- Misc
       .clk                               (clk),
-      .reset                             (reset)
+      .reset                             (reset),
+      .fifo_cpu_rdata                    (fifo_cpu_rdata),
+      .fifo_packet_ready                 (fifo_packet_ready),
+      .fifo_cpu_read                     (fifo_cpu_read),
+      .fifo_cpu_write                    (fifo_cpu_write),
+      .fifo_cpu_done                     (fifo_cpu_done),
+      .fifo_cpu_addr                     (fifo_cpu_addr),
+      .fifo_cpu_wdata                    (fifo_cpu_wdata)
    );
    
    // FIFO

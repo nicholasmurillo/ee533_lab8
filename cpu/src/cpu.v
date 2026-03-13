@@ -18,7 +18,16 @@ module cpu (
     input  wire resp_rdy,
 
     // External start
-    input wire start
+    input wire start,
+
+    // FIFO connections
+    input wire [`DATA_WIDTH-1:0]        fifo_cpu_rdata,
+    input wire                          fifo_packet_ready,
+    output wire                         fifo_cpu_read,
+    output wire                         fifo_cpu_write,
+    output wire                         fifo_cpu_done,
+    output wire [`FIFO_ADDR_WIDTH-1:0]  fifo_cpu_addr,
+    output wire [`DATA_WIDTH-1:0]       fifo_cpu_wdata
 );
 
 ///////////////////////////////////////////////////////////////
@@ -134,6 +143,8 @@ wire [`D_MEM_ADDR_WIDTH-1:0] cpu_d_addr;
 wire [`DATA_WIDTH-1:0]       cpu_d_wdata;
 wire                         cpu_d_we;
 wire [`DATA_WIDTH-1:0]       d_mem_dout;
+wire                         d_mem_we;
+wire [`DATA_WIDTH-1:0]       ctrl_rdata_mux;
 
 reg  [`D_MEM_ADDR_WIDTH-1:0] d_mem_addr_mux;
 reg  [`DATA_WIDTH-1:0]       d_mem_din_mux;
@@ -147,7 +158,7 @@ always @(*) begin
     end else begin
         d_mem_addr_mux = cpu_d_addr;
         d_mem_din_mux  = cpu_d_wdata;
-        d_mem_we_mux   = cpu_d_we;
+        d_mem_we_mux   = d_mem_we;
     end
 end
 
@@ -233,11 +244,27 @@ datapath u_datapath (
     .i_mem_addr_out(cpu_i_addr),
 
     .d_mem_addr_out(cpu_d_addr),
-    .d_mem_data_in(d_mem_dout),
+    .d_mem_data_in(ctrl_rdata_mux),
     .d_mem_data_out(cpu_d_wdata),
     .d_mem_wen_out(cpu_d_we),
 
     .cpu_done(cpu_done)
+);
+
+controller u_controller (
+    .cpu_d_addr(cpu_d_addr),
+    .cpu_d_wdata(cpu_d_wdata),
+    .cpu_d_we(cpu_d_we),
+    .d_mem_dout(d_mem_dout),
+    .d_mem_we(d_mem_we),
+    .fifo_cpu_rdata(fifo_cpu_rdata),
+    .fifo_packet_ready(fifo_packet_ready),
+    .fifo_cpu_read(fifo_cpu_read),
+    .fifo_cpu_write(fifo_cpu_write),
+    .fifo_cpu_done(fifo_cpu_done),
+    .fifo_cpu_addr(fifo_cpu_addr),
+    .fifo_cpu_wdata(fifo_cpu_wdata),
+    .ctrl_rdata_mux(ctrl_rdata_mux)
 );
 
 i_mem u_i_mem (

@@ -22,7 +22,16 @@ module top
 
       // misc
       input                                reset,
-      input                                clk
+      input                                clk,
+
+      // FIFO connections
+      input wire [`DATA_WIDTH-1:0]        fifo_cpu_rdata,
+      input wire                          fifo_packet_ready,
+      output wire                         fifo_cpu_read,
+      output wire                         fifo_cpu_write,
+      output wire                         fifo_cpu_done,
+      output wire [`FIFO_ADDR_WIDTH-1:0]  fifo_cpu_addr,
+      output wire [`DATA_WIDTH-1:0]       fifo_cpu_wdata 
    );
 
    // Software registers
@@ -63,7 +72,16 @@ module top
         .resp_rdy         (sw_resp_rdy[0]),               
 
         // ---- CPU control ----
-        .start            (sw_cpu_start[0])
+        .start            (sw_cpu_start[0]),
+        
+        // FIFO connections
+        .fifo_cpu_rdata(fifo_cpu_rdata),
+        .fifo_packet_ready(fifo_packet_ready),
+        .fifo_cpu_read(fifo_cpu_read),
+        .fifo_cpu_write(fifo_cpu_write),
+        .fifo_cpu_done(fifo_cpu_done),
+        .fifo_cpu_addr(fifo_cpu_addr),
+        .fifo_cpu_wdata(fifo_cpu_wdata)
     );
 
     // Hardware Update
