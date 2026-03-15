@@ -240,8 +240,6 @@ module user_data_path
    wire [63:0] fifo_cpu_wdata;
    wire [63:0] fifo_cpu_rdata;
    wire        fifo_packet_ready;
-   assign fifo_in_word = {oq_in_ctrl, oq_in_data};
-   assign fifo_in_rdy = ~fifo_full;
 
    //------- output queues wires/regs ------
    wire [CTRL_WIDTH-1:0]            oq_in_ctrl;
@@ -265,6 +263,8 @@ module user_data_path
    wire [UDP_REG_SRC_WIDTH-1:0]     udp_reg_src_in;
 
 
+   assign fifo_in_word = {oq_in_ctrl, oq_in_data};
+   assign fifo_in_rdy = ~fifo_full;
    //--------- Connect the data path -----------
    
    input_arbiter
