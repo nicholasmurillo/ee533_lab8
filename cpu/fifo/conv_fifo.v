@@ -40,11 +40,20 @@ wire [7:0] in_ctrl;
 assign in_ctrl = in_fifo[DATA_WIDTH-1:DATA_WIDTH-8];
 
 //=============== Signals ================== 
+
 reg [ADDR_WIDTH-1:0] write_ptr;
 reg [ADDR_WIDTH-1:0] send_ptr;
 reg [ADDR_WIDTH-1:0] packet_start;
 reg [ADDR_WIDTH-1:0] packet_end;
 reg [ADDR_WIDTH-1:0] next_free_ptr;
+
+// Delayed
+reg                  cpu_write_d;
+reg                  cpu_read_d;
+reg [63:0]           cpu_wdata_d;
+reg                  fifo_cpu_busy;
+reg                  fifo_read_d;
+reg [ADDR_WIDTH-1:0] send_ptr_d;
 
 // BRAM 
 reg [0:0]               bram_we_a;
@@ -88,7 +97,7 @@ always @(*) begin
         end
 
         SEND_S: begin
-            if (fiforead && (send_ptr == packet_end))
+            if (fifo_read_d && (send_ptr_d == packet_end))
                 next_state = IDLE_S;
         end
 
@@ -99,24 +108,31 @@ end
 // Main Logic
 always @(posedge clk or posedge rst) begin
     if (rst) begin
-        fifo_full     <= 1'b0;
-        packet_ready  <= 1'b0;
-        valid_data    <= 1'b0;
-        out_fifo      <= {DATA_WIDTH{1'b0}};
-        cpu_rdata     <= 63'b0;
+        fifo_full <= 1'b0;
+        packet_ready <= 1'b0;
+        valid_data <= 1'b0;
+        out_fifo <= {DATA_WIDTH{1'b0}};
+        cpu_rdata <= 64'b0;
 
-        write_ptr     <= {ADDR_WIDTH{1'b0}};
-        send_ptr      <= {ADDR_WIDTH{1'b0}};
-        packet_start  <= {ADDR_WIDTH{1'b0}};
-        packet_end    <= {ADDR_WIDTH{1'b0}};
+        write_ptr <= {ADDR_WIDTH{1'b0}};
+        send_ptr <= {ADDR_WIDTH{1'b0}};
+        packet_start <= {ADDR_WIDTH{1'b0}};
+        packet_end <= {ADDR_WIDTH{1'b0}};
         next_free_ptr <= {ADDR_WIDTH{1'b0}};
 
-        bram_we_a     <= 1'b0;
-        bram_addr_a   <= {ADDR_WIDTH{1'b0}};
-        bram_din_a    <= {DATA_WIDTH{1'b0}};
-        bram_we_b     <= 1'b0;
-        bram_addr_b   <= {ADDR_WIDTH{1'b0}};
-        bram_din_b    <= {DATA_WIDTH{1'b0}};
+        bram_we_a <= 1'b0;
+        bram_addr_a <= {ADDR_WIDTH{1'b0}};
+        bram_din_a <= {DATA_WIDTH{1'b0}};
+        bram_we_b <= 1'b0;
+        bram_addr_b <= {ADDR_WIDTH{1'b0}};
+        bram_din_b <= {DATA_WIDTH{1'b0}};
+
+        send_ptr_d <= {ADDR_WIDTH{1'b0}};
+        cpu_read_d <= 1'b0;
+        cpu_write_d <= 1'b0;
+        cpu_wdata_d <= 64'b0;
+        fifo_cpu_busy <= 1'b0;
+        fifo_read_d <= 1'b0;
 
         // Pkt
         pkt_state <= START_P;
@@ -232,39 +248,58 @@ always @(posedge clk or posedge rst) begin
             WAIT_CPU_S: begin
                 fifo_full <= 1'b1;
                 packet_ready <= 1'b1;
+                bram_we_b <= 1'b0;
 
-                bram_addr_b <=  packet_start + cpu_addr;
-
-                if (cpu_write) begin
-                    bram_din_b <= {bram_dout_b[71:64], cpu_wdata};
-                    bram_we_b <= 1'b1;
+                if (!fifo_cpu_busy) begin
+                    if (cpu_read || cpu_write) begin
+                        fifo_cpu_busy <= 1'b1;
+                        cpu_read_d <= cpu_read;
+                        cpu_write_d <= cpu_write;
+                        cpu_wdata_d <= cpu_wdata;
+                        bram_addr_b <= packet_start + cpu_addr;
+                    end
+                    if (cpu_done)
+                        send_ptr <= packet_start;
+                end 
+                else begin 
+                    if (cpu_read_d) begin
+                        cpu_rdata <= bram_dout_b[63:0];
+                        cpu_read_d <= 1'b0;
+                        fifo_cpu_busy <= 1'b0;
+                    end
+                    else if (cpu_write_d) begin
+                        bram_din_b <= {bram_dout_b[71:64], cpu_wdata_d};
+                        bram_we_b <= 1'b1;
+                        cpu_write_d <= 1'b0;
+                        fifo_cpu_busy <= 1'b0;
+                    end
                 end
-                if (cpu_read)
-                    cpu_rdata <= bram_dout_b[63:0];
-
-                if (cpu_done)
-                    send_ptr <= packet_start;
             end
             
             // Output processed packets
             SEND_S: begin
                 fifo_full <= 1'b1;
                 packet_ready <= 1'b0;
+                valid_data <= 1'b0;
 
-                bram_addr_b <= send_ptr;
-
-                if (fiforead) begin
+                if (fiforead && !fifo_read_d) begin
+                    fifo_read_d <= 1'b1;
+                    bram_addr_b <= send_ptr;
+                    send_ptr_d <= send_ptr;
+                end
+                else if (fifo_read_d) begin
+                    fifo_read_d <= 1'b0;
                     out_fifo <= bram_dout_b;
                     valid_data <= 1'b1;
 
-                    if (send_ptr == packet_end) begin
+                    if (send_ptr_d == packet_end) begin
                         fifo_full <= 1'b0;
                         write_ptr <= next_free_ptr;
                     end else begin
-                        if (send_ptr == {ADDR_WIDTH{1'b1}})
+                        if (send_ptr_d == {ADDR_WIDTH{1'b1}})
                             send_ptr <= {ADDR_WIDTH{1'b0}};
                         else
-                            send_ptr <= send_ptr + 1'b1;
+                            send_ptr <= send_ptr_d + 1'b1;
                     end
                 end
             end
