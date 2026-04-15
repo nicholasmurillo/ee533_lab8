@@ -47,7 +47,8 @@ module top
     reg [31:0] hw_req_rdy;                
     reg [31:0] hw_resp_data_lo;     
     reg [31:0] hw_resp_data_hi;     
-    reg [31:0] hw_resp_val;         
+    reg [31:0] hw_resp_val;
+    reg [31:0] hw_fifo;         
    
     wire [63:0] req_data_64 = {sw_req_data_hi, sw_req_data_lo};
 
@@ -98,6 +99,7 @@ module top
             hw_resp_val       <= {31'b0, cpu_resp_val};
             hw_resp_data_lo   <= cpu_resp_data[31:0];
             hw_resp_data_hi   <= cpu_resp_data[63:32];
+            hw_fifo           <= {31'b0, fifo_packet_ready};
         end
     end
 
@@ -108,7 +110,7 @@ module top
         .REG_ADDR_WIDTH      (`TOP_REG_ADDR_WIDTH),
         .NUM_COUNTERS        (0),
         .NUM_SOFTWARE_REGS   (7),
-        .NUM_HARDWARE_REGS   (4)
+        .NUM_HARDWARE_REGS   (5)
     ) module_regs (
         .reg_req_in        (reg_req_in),
         .reg_ack_in        (reg_ack_in),
@@ -137,7 +139,8 @@ module top
                             sw_req_cmd}),         
 
         // Hardware Registers
-        .hardware_regs     ({hw_resp_val,         
+        .hardware_regs     ({hw_fifo,
+                            hw_resp_val,         
                             hw_resp_data_hi,      
                             hw_resp_data_lo,         
                             hw_req_rdy}),         

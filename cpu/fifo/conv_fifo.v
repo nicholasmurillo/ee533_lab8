@@ -28,14 +28,22 @@ localparam WAIT_CPU_S = 2'd2;
 localparam SEND_S     = 2'd3;
 reg [1:0] state, next_state;
 
+// CPU access sub-states
+localparam CPU_IDLE      = 2'd0;
+localparam CPU_ADDR_SET  = 2'd1; 
+localparam CPU_DATA_RDY  = 2'd2;  
+localparam CPU_WRITE_COM = 2'd3; 
+reg [1:0] cpu_state;
+
 // pkt sm
 localparam START_P   = 2'd0;
 localparam HEADER_P  = 2'd1;
 localparam PAYLOAD_P = 2'd2;
+
 reg [1:0] pkt_state;
 reg [2:0] header_count;
-reg begin_pkt;
-reg end_pkt;
+wire begin_pkt;
+wire end_pkt;
 wire [7:0] in_ctrl;
 assign in_ctrl = in_fifo[DATA_WIDTH-1:DATA_WIDTH-8];
 
@@ -45,15 +53,11 @@ reg [ADDR_WIDTH-1:0] write_ptr;
 reg [ADDR_WIDTH-1:0] send_ptr;
 reg [ADDR_WIDTH-1:0] packet_start;
 reg [ADDR_WIDTH-1:0] packet_end;
-reg [ADDR_WIDTH-1:0] next_free_ptr;
 
 // Delayed
-reg                  cpu_write_d;
-reg                  cpu_read_d;
+reg                  cpu_is_write;
 reg [63:0]           cpu_wdata_d;
-reg                  fifo_cpu_busy;
 reg                  fifo_read_d;
-reg [ADDR_WIDTH-1:0] send_ptr_d;
 
 // BRAM 
 reg [0:0]               bram_we_a;
@@ -65,6 +69,10 @@ reg [0:0]               bram_we_b;
 reg [ADDR_WIDTH-1:0]    bram_addr_b;
 reg [DATA_WIDTH-1:0]    bram_din_b;
 wire[DATA_WIDTH-1:0]    bram_dout_b;
+
+// Packet logic
+assign begin_pkt = (pkt_state == START_P) && fifowrite && (in_ctrl != 0);
+assign end_pkt = (pkt_state == PAYLOAD_P) && fifowrite && (in_ctrl != 0);
 
 // State machine on reset
 always @(posedge clk or posedge rst) begin
@@ -80,24 +88,22 @@ always @(*) begin
 
     case (state)
         IDLE_S: begin
-            if (fifowrite && begin_pkt && end_pkt)
-                next_state = WAIT_CPU_S;
-            else if (fifowrite && begin_pkt)
+            if (begin_pkt)
                 next_state = RECEIVE_S;
         end
 
         RECEIVE_S: begin
-            if (fifowrite && end_pkt)
+            if (end_pkt)
                 next_state = WAIT_CPU_S;
         end
 
         WAIT_CPU_S: begin
-            if (cpu_done)
+            if (cpu_done && (cpu_state == CPU_IDLE))
                 next_state = SEND_S;
         end
 
         SEND_S: begin
-            if (fifo_read_d && (send_ptr_d == packet_end))
+            if (fifo_read_d && (send_ptr == packet_end + 8'd1))
                 next_state = IDLE_S;
         end
 
@@ -118,7 +124,6 @@ always @(posedge clk or posedge rst) begin
         send_ptr <= {ADDR_WIDTH{1'b0}};
         packet_start <= {ADDR_WIDTH{1'b0}};
         packet_end <= {ADDR_WIDTH{1'b0}};
-        next_free_ptr <= {ADDR_WIDTH{1'b0}};
 
         bram_we_a <= 1'b0;
         bram_addr_a <= {ADDR_WIDTH{1'b0}};
@@ -127,34 +132,26 @@ always @(posedge clk or posedge rst) begin
         bram_addr_b <= {ADDR_WIDTH{1'b0}};
         bram_din_b <= {DATA_WIDTH{1'b0}};
 
-        send_ptr_d <= {ADDR_WIDTH{1'b0}};
-        cpu_read_d <= 1'b0;
-        cpu_write_d <= 1'b0;
+        cpu_is_write <= 1'b0;
         cpu_wdata_d <= 64'b0;
-        fifo_cpu_busy <= 1'b0;
+        cpu_state <= CPU_IDLE;
         fifo_read_d <= 1'b0;
 
         // Pkt
         pkt_state <= START_P;
         header_count <= 3'd0;
-        begin_pkt <= 1'b0;
-        end_pkt <= 1'b0;
 
     end else begin
-        bram_we_a   <= 1'b0;
-        bram_we_b   <= 1'b0;
-        valid_data  <= 1'b0;
-        begin_pkt <= 1'b0;
-        end_pkt <= 1'b0;
+        bram_we_a <= 1'b0;
+        valid_data <= 1'b0;
 
-        // Pkt
+        // Packet parser
         if (fifowrite) begin
             case (pkt_state)
                 START_P: begin
                     if (in_ctrl != 0) begin
                         pkt_state <= HEADER_P;
                         header_count <= 3'd0;
-                        begin_pkt <= 1'b1;
                     end
                 end
 
@@ -170,7 +167,6 @@ always @(posedge clk or posedge rst) begin
                     if (in_ctrl != 0) begin
                         pkt_state <= START_P;
                         header_count <= 3'd0;
-                        end_pkt <= 1'b1;
                     end
                 end
 
@@ -181,30 +177,24 @@ always @(posedge clk or posedge rst) begin
             endcase
         end
 
-        // FIFO
+        // ---- Main FSM ----
         case (state)
-            // Wait for first word
             IDLE_S: begin
                 fifo_full <= 1'b0;
                 packet_ready <= 1'b0;
-
                 bram_addr_a <= write_ptr;
                 bram_din_a <= in_fifo;
 
-                if (fifowrite && begin_pkt) begin
-                    packet_start <= write_ptr;
-
+                if (fifowrite) begin
                     bram_we_a <= 1'b1;
                     bram_addr_a <= write_ptr;
                     bram_din_a <= in_fifo;
 
+                    if (begin_pkt)
+                        packet_start <= write_ptr;
+
                     if (end_pkt) begin
-                        packet_end <= write_ptr;
-                        if (write_ptr == {ADDR_WIDTH{1'b1}})
-                            next_free_ptr <= {ADDR_WIDTH{1'b0}};
-                        else
-                            next_free_ptr <= write_ptr + 1'b1;
-                        send_ptr <= write_ptr;
+                        packet_end <= write_ptr;                         
                         fifo_full <= 1'b1;
                         packet_ready <= 1'b1;
                     end
@@ -216,9 +206,8 @@ always @(posedge clk or posedge rst) begin
                 end
             end
 
-            // Receive packets from NetFPGA
             RECEIVE_S: begin
-                fifo_full <= 1'b0;
+                fifo_full    <= 1'b0;
                 packet_ready <= 1'b0;
 
                 if (fifowrite) begin
@@ -228,11 +217,6 @@ always @(posedge clk or posedge rst) begin
 
                     if (end_pkt) begin
                         packet_end <= write_ptr;
-                        if (write_ptr == {ADDR_WIDTH{1'b1}})
-                            next_free_ptr <= {ADDR_WIDTH{1'b0}};
-                        else
-                            next_free_ptr <= write_ptr + 1'b1;
-                        send_ptr <= packet_start;
                         fifo_full <= 1'b1;
                         packet_ready <= 1'b1;
                     end
@@ -244,40 +228,50 @@ always @(posedge clk or posedge rst) begin
                 end
             end
 
-            // CPU accesses bram
             WAIT_CPU_S: begin
                 fifo_full <= 1'b1;
                 packet_ready <= 1'b1;
                 bram_we_b <= 1'b0;
 
-                if (!fifo_cpu_busy) begin
-                    if (cpu_read || cpu_write) begin
-                        fifo_cpu_busy <= 1'b1;
-                        cpu_read_d <= cpu_read;
-                        cpu_write_d <= cpu_write;
-                        cpu_wdata_d <= cpu_wdata;
-                        bram_addr_b <= packet_start + cpu_addr;
+                case (cpu_state)
+                    CPU_IDLE: begin
+                        if (cpu_done)
+                            send_ptr <= packet_start + 8'd1;
+                            bram_addr_b <= packet_start;
+
+                        if (cpu_read || cpu_write) begin
+                            cpu_is_write <= cpu_write;
+                            cpu_wdata_d <= cpu_wdata;
+                            bram_addr_b <= packet_start + cpu_addr;
+                            cpu_state <= CPU_ADDR_SET;
+                        end
                     end
-                    if (cpu_done)
-                        send_ptr <= packet_start;
-                end 
-                else begin 
-                    if (cpu_read_d) begin
-                        cpu_rdata <= bram_dout_b[63:0];
-                        cpu_read_d <= 1'b0;
-                        fifo_cpu_busy <= 1'b0;
+
+                    CPU_ADDR_SET: begin
+                        cpu_state <= CPU_DATA_RDY;
                     end
-                    else if (cpu_write_d) begin
-                        bram_din_b <= {bram_dout_b[71:64], cpu_wdata_d};
-                        bram_we_b <= 1'b1;
-                        cpu_write_d <= 1'b0;
-                        fifo_cpu_busy <= 1'b0;
+
+                    CPU_DATA_RDY: begin
+                        if (!cpu_is_write) begin
+                            cpu_rdata <= bram_dout_b[63:0];
+                            cpu_state <= CPU_IDLE;
+                        end else begin
+                            bram_din_b <= {bram_dout_b[71:64], cpu_wdata_d};
+                            bram_we_b <= 1'b1;
+                            cpu_state <= CPU_WRITE_COM;
+                        end
                     end
-                end
+
+                    CPU_WRITE_COM: begin
+                        cpu_state <= CPU_IDLE;
+                    end
+
+                    default: cpu_state <= CPU_IDLE;
+                endcase
             end
             
-            // Output processed packets
             SEND_S: begin
+                bram_we_b <= 1'b0;
                 fifo_full <= 1'b1;
                 packet_ready <= 1'b0;
                 valid_data <= 1'b0;
@@ -285,21 +279,19 @@ always @(posedge clk or posedge rst) begin
                 if (fiforead && !fifo_read_d) begin
                     fifo_read_d <= 1'b1;
                     bram_addr_b <= send_ptr;
-                    send_ptr_d <= send_ptr;
                 end
                 else if (fifo_read_d) begin
                     fifo_read_d <= 1'b0;
                     out_fifo <= bram_dout_b;
                     valid_data <= 1'b1;
 
-                    if (send_ptr_d == packet_end) begin
+                    if (send_ptr == packet_end + 8'd1)
                         fifo_full <= 1'b0;
-                        write_ptr <= next_free_ptr;
-                    end else begin
-                        if (send_ptr_d == {ADDR_WIDTH{1'b1}})
+                    else begin
+                        if (send_ptr == {ADDR_WIDTH{1'b1}})
                             send_ptr <= {ADDR_WIDTH{1'b0}};
                         else
-                            send_ptr <= send_ptr_d + 1'b1;
+                            send_ptr <= send_ptr + 1'b1;
                     end
                 end
             end

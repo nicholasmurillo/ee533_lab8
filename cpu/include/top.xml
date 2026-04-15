@@ -81,5 +81,11 @@
             <nf:type>generic_hardware32</nf:type>
         </nf:register>
 
+        <nf:register>
+            <nf:name>hw_fifo</nf:name>
+            <nf:description>Response fifo packet ready</nf:description>
+            <nf:type>generic_hardware32</nf:type>
+        </nf:register>
+
     </nf:registers>
 </nf:module>
