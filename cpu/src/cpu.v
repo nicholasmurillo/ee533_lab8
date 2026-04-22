@@ -116,10 +116,10 @@ end
 // Instruction Memory Arbiter
 ///////////////////////////////////////////////////////////////
 
-wire [`PC_WIDTH-1:0]    cpu_i_addr;
+wire [`I_MEM_ADDR_WIDTH-1:0]    cpu_i_addr;
 wire [`INSTR_WIDTH-1:0] i_mem_dout;
 
-reg  [`PC_WIDTH-1:0]    i_mem_addr_mux;
+reg  [`I_MEM_ADDR_WIDTH-1:0]    i_mem_addr_mux;
 reg  [`INSTR_WIDTH-1:0] i_mem_din_mux;
 reg                     i_mem_we_mux;
 

@@ -58,7 +58,7 @@ reg [ADDR_WIDTH-1:0] packet_end;
 reg                  cpu_is_write;
 reg [63:0]           cpu_wdata_d;
 reg                  fifo_read_d;
-
+reg                  cpu_done_pending;
 // BRAM 
 reg [0:0]               bram_we_a;
 reg [ADDR_WIDTH-1:0]    bram_addr_a;
@@ -98,7 +98,7 @@ always @(*) begin
         end
 
         WAIT_CPU_S: begin
-            if (cpu_done && (cpu_state == CPU_IDLE))
+            if (cpu_done_pending && (cpu_state == CPU_IDLE))
                 next_state = SEND_S;
         end
 
@@ -136,7 +136,7 @@ always @(posedge clk or posedge rst) begin
         cpu_wdata_d <= 64'b0;
         cpu_state <= CPU_IDLE;
         fifo_read_d <= 1'b0;
-
+        cpu_done_pending <= 1'b0;
         // Pkt
         pkt_state <= START_P;
         header_count <= 3'd0;
@@ -177,7 +177,7 @@ always @(posedge clk or posedge rst) begin
             endcase
         end
 
-        // ---- Main FSM ----
+        // Main FSM
         case (state)
             IDLE_S: begin
                 fifo_full <= 1'b0;
@@ -233,12 +233,17 @@ always @(posedge clk or posedge rst) begin
                 packet_ready <= 1'b1;
                 bram_we_b <= 1'b0;
 
+                // Latch cpu_done
+                if (cpu_done)
+                    cpu_done_pending <= 1'b1;
+
                 case (cpu_state)
                     CPU_IDLE: begin
-                        if (cpu_done)
+                        if (cpu_done_pending) begin
                             send_ptr <= packet_start + 8'd1;
                             bram_addr_b <= packet_start;
-
+                            cpu_done_pending <= 1'b0;
+                        end
                         if (cpu_read || cpu_write) begin
                             cpu_is_write <= cpu_write;
                             cpu_wdata_d <= cpu_wdata;

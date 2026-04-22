@@ -8,15 +8,15 @@ module datapath (
     input  wire                     rst_n,
 
     // Instruction memory interface
-    input  wire [`INSTR_WIDTH-1:0] i_mem_data_in,
-    output wire [`PC_WIDTH-1:0]          i_mem_addr_out,
+    input  wire [`INSTR_WIDTH-1:0] 		 i_mem_data_in,
+    output wire [`I_MEM_ADDR_WIDTH-1:0]  i_mem_addr_out,
 
     // Data memory interface
     input  wire [`DATA_WIDTH-1:0]        d_mem_data_in,
     output wire [`D_MEM_ADDR_WIDTH-1:0]  d_mem_addr_out,
     output wire [`DATA_WIDTH-1:0]        d_mem_data_out,
     output wire                          d_mem_wen_out,
-		output wire 												 cpu_done
+	output wire 						 cpu_done
 );
 
     // ============================================================
@@ -163,7 +163,7 @@ module datapath (
 	 endgenerate
 	 
 	 assign pc_fetch = current_pc;
-	 assign i_mem_addr_out = pc_fetch;
+	 assign i_mem_addr_out = pc_fetch[10:0];
 	 
 	 pipeline_reg #(.REGS(2+`PC_WIDTH)) if_id_stage (
 		.clk(clk),
